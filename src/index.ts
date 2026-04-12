@@ -6,101 +6,147 @@ import { z } from "zod"
 const BASE = "https://krisyotam.com"
 const DATA = "https://data.krisyotam.com"
 
-interface SearchItem {
-  title: string
-  preview: string
-  slug: string
-  type: string
-  category: string
-  tags: string[]
-  start_date: string
-  url: string
-}
+const CONTENT_TABLES = [
+  "blog", "essays", "papers", "fiction", "verse",
+  "reviews", "progymnasmata", "diary", "ocs", "news", "documents",
+]
 
-async function fetchJson<T>(url: string): Promise<T> {
+async function dsQuery<T>(db: string, sql: string): Promise<T[]> {
+  const url = `${DATA}/${db}.json?sql=${encodeURIComponent(sql)}&_shape=array`
   const res = await fetch(url)
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${url}`)
-  return res.json() as Promise<T>
+  if (!res.ok) throw new Error(`Datasette ${res.status}: ${db} — ${sql.slice(0, 80)}`)
+  return res.json() as Promise<T[]>
 }
 
-function formatItem(item: SearchItem): string {
-  const date = item.start_date ? ` (${item.start_date.slice(0, 10)})` : ""
-  const preview = item.preview ? `\n   ${item.preview.slice(0, 120)}` : ""
-  const cat = item.category ? ` · ${item.category}` : ""
-  return `[${item.type}${cat}] ${item.title}${date}\n   ${BASE}${item.url}${preview}`
+function fmt(type: string, title: string, category: string, url: string, preview?: string): string {
+  const cat = category ? ` · ${category}` : ""
+  const pre = preview ? `\n   ${preview.slice(0, 120)}` : ""
+  return `[${type}${cat}] ${title}\n   ${url}${pre}`
 }
 
-const server = new McpServer({
-  name: "krisyotam",
-  version: "1.0.0",
-})
+const server = new McpServer({ name: "krisyotam", version: "1.0.0" })
 
 // ── search_all ───────────────────────────────────────────────────────────────
 server.tool(
   "search_all",
-  "Search all content on krisyotam.com — blog, essays, papers, fiction, verse, poetry, prayers, and more.",
+  "Search all content on krisyotam.com — writing, poetry, essays, prayers, and more.",
   { query: z.string().describe("Search query") },
   async ({ query }) => {
-    const [content, reference] = await Promise.all([
-      fetchJson<SearchItem[]>(`${BASE}/api/content/search`),
-      fetchJson<SearchItem[]>(`${BASE}/api/reference/search?q=${encodeURIComponent(query)}`),
+    const q = query.replace(/'/g, "''")
+
+    // Content: UNION ALL across all content tables
+    const contentUnion = CONTENT_TABLES.map(t =>
+      `SELECT '${t}' AS type, slug, title, preview, category_slug FROM ${t}
+       WHERE state='active' AND (title LIKE '%${q}%' OR preview LIKE '%${q}%' OR category_slug LIKE '%${q}%')`
+    ).join(" UNION ALL ")
+
+    const [contentRows, poemRows, essaiRows, prayerRows] = await Promise.all([
+      dsQuery<{ type: string; slug: string; title: string; preview: string; category_slug: string }>(
+        "content", `${contentUnion} LIMIT 20`
+      ),
+      dsQuery<{ slug: string; title: string; author_name: string; first_line: string; path: string }>(
+        "reference",
+        `SELECT slug, title, author_name, first_line, path FROM poems
+         WHERE state='active' AND (title LIKE '%${q}%' OR author_name LIKE '%${q}%' OR text LIKE '%${q}%') LIMIT 15`
+      ),
+      dsQuery<{ slug: string; title: string; author_name: string; path: string }>(
+        "reference",
+        `SELECT slug, title, author_name, path FROM essais
+         WHERE state='active' AND (title LIKE '%${q}%' OR author_name LIKE '%${q}%' OR text LIKE '%${q}%') LIMIT 10`
+      ),
+      dsQuery<{ slug: string; title: string; author_name: string; path: string }>(
+        "reference",
+        `SELECT slug, title, author_name, path FROM prayer
+         WHERE state='active' AND (title LIKE '%${q}%' OR author_name LIKE '%${q}%' OR text LIKE '%${q}%') LIMIT 5`
+      ),
     ])
 
-    const q = query.toLowerCase()
-    const contentMatches = content.filter(item =>
-      item.title?.toLowerCase().includes(q) ||
-      item.preview?.toLowerCase().includes(q) ||
-      item.category?.toLowerCase().includes(q) ||
-      item.tags?.some(t => t.toLowerCase().includes(q))
-    )
+    const lines: string[] = []
+    for (const r of contentRows)
+      lines.push(fmt(r.type, r.title, r.category_slug, `${BASE}/${r.slug}`, r.preview))
+    for (const r of poemRows)
+      lines.push(fmt("poem", r.title, r.author_name, `${BASE}/poetry/${r.path}`, r.first_line))
+    for (const r of essaiRows)
+      lines.push(fmt("essay", r.title, r.author_name, `${BASE}/essais/${r.path}`))
+    for (const r of prayerRows)
+      lines.push(fmt("prayer", r.title, r.author_name, `${BASE}/prayer/${r.path}`))
 
-    const all = [...contentMatches, ...reference]
-    if (all.length === 0) return { content: [{ type: "text", text: `No results for "${query}".` }] }
+    if (!lines.length)
+      return { content: [{ type: "text", text: `No results for "${query}".` }] }
 
-    const out = all.slice(0, 20).map(formatItem).join("\n\n")
-    return { content: [{ type: "text", text: `${all.length} results for "${query}":\n\n${out}` }] }
+    return { content: [{ type: "text", text: `${lines.length} results for "${query}":\n\n${lines.join("\n\n")}` }] }
   }
 )
 
 // ── search_content ───────────────────────────────────────────────────────────
 server.tool(
   "search_content",
-  "Search Kris Yotam's writing — blog posts, essays, papers, fiction, verse, reviews, TILs, and diary entries.",
-  { query: z.string().describe("Search query") },
-  async ({ query }) => {
-    const content = await fetchJson<SearchItem[]>(`${BASE}/api/content/search`)
-    const q = query.toLowerCase()
-    const matches = content.filter(item =>
-      item.title?.toLowerCase().includes(q) ||
-      item.preview?.toLowerCase().includes(q) ||
-      item.category?.toLowerCase().includes(q) ||
-      item.tags?.some(t => t.toLowerCase().includes(q))
+  "Search Kris Yotam's writing — blog posts, essays, papers, fiction, verse, reviews, and more.",
+  {
+    query: z.string().describe("Search query"),
+    type: z.enum(["all", "blog", "essays", "papers", "fiction", "verse", "reviews", "progymnasmata", "diary", "ocs", "news", "documents"])
+      .optional().describe("Filter by content type (default: all)"),
+  },
+  async ({ query, type = "all" }) => {
+    const q = query.replace(/'/g, "''")
+    const tables = type === "all" ? CONTENT_TABLES : [type]
+
+    const union = tables.map(t =>
+      `SELECT '${t}' AS type, slug, title, preview, category_slug, start_date FROM ${t}
+       WHERE state='active' AND (title LIKE '%${q}%' OR preview LIKE '%${q}%' OR category_slug LIKE '%${q}%')`
+    ).join(" UNION ALL ")
+
+    const rows = await dsQuery<{ type: string; slug: string; title: string; preview: string; category_slug: string; start_date: string }>(
+      "content", `${union} ORDER BY start_date DESC LIMIT 20`
     )
 
-    if (matches.length === 0) return { content: [{ type: "text", text: `No results for "${query}".` }] }
+    if (!rows.length)
+      return { content: [{ type: "text", text: `No results for "${query}".` }] }
 
-    const out = matches.slice(0, 20).map(formatItem).join("\n\n")
-    return { content: [{ type: "text", text: `${matches.length} results for "${query}":\n\n${out}` }] }
+    const lines = rows.map(r => fmt(r.type, r.title, r.category_slug, `${BASE}/${r.slug}`, r.preview))
+    return { content: [{ type: "text", text: `${rows.length} results:\n\n${lines.join("\n\n")}` }] }
   }
 )
 
 // ── search_reference ─────────────────────────────────────────────────────────
 server.tool(
   "search_reference",
-  "Full-text search across Kris Yotam's reference collection — 3200+ poems, essays, and prayers. Searches poem body text.",
+  "Full-text search across the reference collection — 3200+ poems, essays, and prayers.",
   {
-    query: z.string().describe("Search query — can match poem text, title, or author"),
+    query: z.string().describe("Search query — matches title, author, or full text"),
     type: z.enum(["all", "poems", "essais", "prayer"]).optional().describe("Filter by type (default: all)"),
   },
   async ({ query, type = "all" }) => {
-    const items = await fetchJson<SearchItem[]>(
-      `${BASE}/api/reference/search?q=${encodeURIComponent(query)}&type=${type}`
-    )
+    const q = query.replace(/'/g, "''")
+    const tables = type === "all" ? ["poems", "essais", "prayer"] : [type]
 
-    if (items.length === 0) return { content: [{ type: "text", text: `No results for "${query}".` }] }
+    const lines: string[] = []
 
-    const out = items.map(formatItem).join("\n\n")
-    return { content: [{ type: "text", text: `${items.length} results for "${query}":\n\n${out}` }] }
+    for (const t of tables) {
+      const route = t === "poems" ? "poetry" : t
+      if (t === "poems") {
+        const rows = await dsQuery<{ slug: string; title: string; author_name: string; first_line: string; path: string }>(
+          "reference",
+          `SELECT slug, title, author_name, first_line, path FROM poems
+           WHERE state='active' AND (title LIKE '%${q}%' OR author_name LIKE '%${q}%' OR text LIKE '%${q}%') LIMIT 30`
+        )
+        for (const r of rows)
+          lines.push(fmt("poem", r.title, r.author_name, `${BASE}/${route}/${r.path}`, r.first_line))
+      } else {
+        const rows = await dsQuery<{ slug: string; title: string; author_name: string; path: string; text: string }>(
+          "reference",
+          `SELECT slug, title, author_name, path, text FROM ${t}
+           WHERE state='active' AND (title LIKE '%${q}%' OR author_name LIKE '%${q}%' OR text LIKE '%${q}%') LIMIT 20`
+        )
+        for (const r of rows)
+          lines.push(fmt(t === "essais" ? "essay" : "prayer", r.title, r.author_name, `${BASE}/${route}/${r.path}`, r.text))
+      }
+    }
+
+    if (!lines.length)
+      return { content: [{ type: "text", text: `No results for "${query}".` }] }
+
+    return { content: [{ type: "text", text: `${lines.length} results:\n\n${lines.join("\n\n")}` }] }
   }
 )
 
@@ -110,65 +156,50 @@ server.tool(
   "Fetch the full text of a specific poem by its path (poet-slug/poem-slug).",
   { path: z.string().describe("Poem path, e.g. emily-dickinson/because-i-could-not-stop-for-death") },
   async ({ path }) => {
-    try {
-      const res = await fetch(`${BASE}/poetry/${path}`)
-      if (!res.ok) throw new Error(`Not found: /poetry/${path}`)
-      const html = await res.text()
-      const match = html.match(/<pre>([\s\S]*?)<\/pre>/)
-      const title = html.match(/<h1>(.*?)<\/h1>/)?.[1] ?? path
-      const text = match ? match[1].trim() : "(text not available)"
-      return { content: [{ type: "text", text: `${title}\n\n${text}\n\n${BASE}/poetry/${path}` }] }
-    } catch (e) {
-      return { content: [{ type: "text", text: `Could not fetch poem at /poetry/${path}` }] }
-    }
+    const p = path.replace(/'/g, "''")
+    const rows = await dsQuery<{ title: string; author_name: string; text: string }>(
+      "reference",
+      `SELECT title, author_name, text FROM poems WHERE path='${p}' LIMIT 1`
+    )
+    if (!rows.length)
+      return { content: [{ type: "text", text: `No poem found at path: ${path}` }] }
+    const { title, author_name, text } = rows[0]
+    return { content: [{ type: "text", text: `${title}\n${author_name}\n\n${text}\n\n${BASE}/poetry/${path}` }] }
   }
 )
 
 // ── list_poets ───────────────────────────────────────────────────────────────
 server.tool(
   "list_poets",
-  "List all poets in the krisyotam.com poetry collection with their poem counts.",
+  "List all poets in the krisyotam.com poetry collection with poem counts.",
   {},
   async () => {
-    const rows = await fetchJson<{ rows: [string, string, number][] }>(
-      `${DATA}/reference/poems.json?sql=SELECT+author_slug,author_name,COUNT(*)+as+count+FROM+poems+GROUP+BY+author_slug+ORDER+BY+count+DESC&_shape=array`
+    const rows = await dsQuery<{ author_name: string; author_slug: string; count: number }>(
+      "reference",
+      "SELECT author_name, author_slug, COUNT(*) as count FROM poems GROUP BY author_slug ORDER BY count DESC"
     )
-
-    if (!rows || !Array.isArray(rows)) {
-      return { content: [{ type: "text", text: "Could not fetch poet list." }] }
-    }
-
-    const lines = (rows as unknown as Array<{ author_name: string; count: number; author_slug: string }>)
-      .map(r => `${r.author_name} (${r.count} poems) — ${BASE}/poetry/${r.author_slug}`)
-      .join("\n")
-
-    return { content: [{ type: "text", text: `Poets in collection:\n\n${lines}` }] }
+    if (!rows.length)
+      return { content: [{ type: "text", text: "No poets found." }] }
+    const lines = rows.map(r => `${r.author_name} (${r.count}) — ${BASE}/poetry/${r.author_slug}`)
+    return { content: [{ type: "text", text: `${rows.length} poets:\n\n${lines.join("\n")}` }] }
   }
 )
 
 // ── query_data ───────────────────────────────────────────────────────────────
 server.tool(
   "query_data",
-  "Run a read-only SQL query against krisyotam.com's public Datasette instance. Available DBs: content, reference, media, system, lab.",
+  "Run a read-only SQL query against data.krisyotam.com. Available DBs: content, reference, media, system, lab.",
   {
     db: z.enum(["content", "reference", "media", "system", "lab"]).describe("Database to query"),
     sql: z.string().describe("SQL SELECT query"),
   },
   async ({ db, sql }) => {
-    const url = `${DATA}/${db}.json?sql=${encodeURIComponent(sql)}&_shape=array`
-    try {
-      const rows = await fetchJson<unknown[]>(url)
-      if (!Array.isArray(rows) || rows.length === 0) {
-        return { content: [{ type: "text", text: "No rows returned." }] }
-      }
-      const text = JSON.stringify(rows.slice(0, 50), null, 2)
-      return { content: [{ type: "text", text: text }] }
-    } catch (e) {
-      return { content: [{ type: "text", text: `Query failed: ${e}` }] }
-    }
+    const rows = await dsQuery(db, sql)
+    if (!rows.length)
+      return { content: [{ type: "text", text: "No rows returned." }] }
+    return { content: [{ type: "text", text: JSON.stringify(rows.slice(0, 50), null, 2) }] }
   }
 )
 
-// ── run ──────────────────────────────────────────────────────────────────────
 const transport = new StdioServerTransport()
 await server.connect(transport)
