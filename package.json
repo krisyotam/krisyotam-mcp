@@ -1,0 +1,21 @@
+{
+  "name": "krisyotam-mcp",
+  "version": "1.0.0",
+  "description": "MCP server for krisyotam.com — search content, poetry, essays, and prayers",
+  "type": "module",
+  "bin": {
+    "krisyotam-mcp": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.10.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5",
+    "@types/node": "^20.12.7"
+  }
+}
