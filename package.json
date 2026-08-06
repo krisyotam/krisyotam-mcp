@@ -1,7 +1,7 @@
 {
   "name": "krisyotam-mcp",
-  "version": "1.0.0",
-  "description": "MCP server for krisyotam.com — search content, poetry, essays, and prayers",
+  "version": "2.0.0",
+  "description": "MCP server for krisyotam.com — search content, poetry, essays, and prayers via Postgres",
   "type": "module",
   "bin": {
     "krisyotam-mcp": "./dist/index.js"
@@ -12,10 +12,11 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.10.2"
+    "@modelcontextprotocol/sdk": "^1.10.2",
+    "postgres": "^3.4.5"
   },
   "devDependencies": {
-    "typescript": "^5.4.5",
-    "@types/node": "^20.12.7"
+    "@types/node": "^20.12.7",
+    "typescript": "^5.4.5"
   }
 }
