@@ -1,22 +1,37 @@
 {
   "name": "krisyotam-mcp",
-  "version": "2.0.0",
-  "description": "MCP server for krisyotam.com — search content, poetry, essays, and prayers via Postgres",
-  "type": "module",
-  "bin": {
-    "krisyotam-mcp": "./dist/index.js"
-  },
+  "version": "3.0.0",
+  "private": true,
+  "description": "Stateless MCP server for the public krisyotam.com corpus",
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
-    "start": "node dist/index.js"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint .",
+    "test:client": "node scripts/test-client.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.10.2",
-    "postgres": "^3.4.5"
+    "@modelcontextprotocol/server": "^2.0.0",
+    "mcp-handler": "^2.0.0",
+    "next": "^15.2.6",
+    "postgres": "^3.4.9",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^4.2.0"
   },
   "devDependencies": {
-    "@types/node": "^20.12.7",
-    "typescript": "^5.4.5"
-  }
+    "@eslint/compat": "^2.0.0",
+    "@eslint/eslintrc": "^3.3.3",
+    "@modelcontextprotocol/client": "^2.0.0",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "eslint": "^9",
+    "eslint-config-next": "^15.2.6",
+    "typescript": "^5"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "packageManager": "pnpm@10.34.4"
 }
